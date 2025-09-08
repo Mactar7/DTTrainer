@@ -1,79 +1,322 @@
 <!doctype html>
-successAdd(req, 'Hold');
-} else {
-// failed — must retry same prompt
-logMsg(`Hold failed: held ${heldFor.toFixed(2)}s / required ${req.toFixed(2)}s — reset attempt`);
-// reset holdStartTime to null; the user must attempt again
-holdStartTime = null;
-promptSub.textContent = `Hold continuously for ${req.toFixed(2)}s — attempt reset.`;
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Endurance-Style Tap-Hold Trainer</title>
+<style>
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-family: sans-serif;
+  background: #f0f2f5;
+  touch-action: manipulation; /* Prevents double-tap zoom */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
-pointerDown = false;
+.config-panel {
+  flex: 0 0 22%;
+  box-sizing: border-box;
+  padding: 6px;
+  background: white;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow-y: auto;
 }
+.config-title {
+  width: 100%;
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.form-group { margin: 2px; flex: 1 1 45%; min-width: 120px; }
+label { display: block; font-size: 11px; margin-bottom: 2px; color: #555; }
+input[type="number"], input[type="file"] { width: 100%; padding: 3px; font-size: 11px; }
+.toggles { display: flex; align-items: center; gap: 4px; }
+.toggles label { font-size: 11px; }
+button {
+  width: 100%; padding: 6px; background: #007bff; color: white;
+  border: none; border-radius: 4px; font-size: 13px; cursor: pointer; margin-top: 4px;
+}
+.prompt-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  background: #fafafa;
+  user-select: none;
+  position: relative;
+}
+.goal-display {
+  position: absolute;
+  top: 10px;
+  font-size: 18px;
+  font-weight: bold;
+  color: #333;
+}
+.prompt { font-size: 20px; margin-bottom: 6px; }
+.timer { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
+.penalty { font-size: 14px; color: red; margin-bottom: 6px; }
+.hidden { display: none; }
+.preview img { width: 100%; height: 100%; object-fit: cover; }
+.hold-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 6px;
+  width: 100%;
+  background: #ddd;
+  border-radius: 4px 4px 0 0;
+}
+.hold-bar-inner {
+  height: 100%;
+  background: #28a745;
+  width: 0%;
+  border-radius: 4px 4px 0 0;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="config-panel" id="configPanel">
+    <div class="config-title">DT Trainer</div>
+    <div class="form-group">
+      <label>Set Goal (seconds)</label>
+      <input type="number" id="goalInput" value="10" />
+    </div>
+    <div class="form-group toggles">
+      <input type="checkbox" id="randomGoalCheckbox" />
+      <label for="randomGoalCheckbox">Randomize Goal</label>
+      <label>Min</label>
+      <input type="number" id="goalMin" value="5" />
+      <label>Max</label>
+      <input type="number" id="goalMax" value="20" />
+    </div>
+    <div class="form-group">
+      <label>Hold Prompt % chance</label>
+      <input type="number" id="holdChance" value="50" min="0" max="100" />
+    </div>
+    <div class="form-group">
+      <label>Hold Min (seconds)</label>
+      <input type="number" id="holdMin" value="1" />
+    </div>
+    <div class="form-group">
+      <label>Hold Max (seconds)</label>
+      <input type="number" id="holdMax" value="3" />
+    </div>
+    <div class="form-group toggles">
+      <input type="checkbox" id="hideTime" />
+      <label for="hideTime">Hide Time</label>
+    </div>
+    <div class="form-group toggles">
+      <input type="checkbox" id="hardMode" />
+      <label for="hardMode">Hard Mode</label>
+    </div>
+    <div class="form-group">
+      <label>Upload Image</label>
+      <input type="file" id="imageUpload" accept="image/*" />
+    </div>
+    <button id="startBtn">Start</button>
+  </div>
 
+  <div class="prompt-area" id="promptArea">
+    <div class="goal-display hidden" id="goalDisplay"></div>
+    <div class="hold-bar hidden" id="holdBar">
+      <div class="hold-bar-inner" id="holdBarInner"></div>
+    </div>
+    <div class="prompt" id="prompt">Press Start</div>
+    <div class="timer" id="timer">0</div>
+    <div class="penalty hidden" id="penaltyDisplay">Goal Penalty: 0s</div>
+    <div class="preview hidden" id="preview"></div>
+  </div>
+</div>
 
-// For safety, if pointer leaves area during hold, treat as release
-function onPointerCancel(e){
-if(!running) return;
-pointerDown = false;
-if(currentPrompt && currentPrompt.type === 'hold'){
-// no immediate message; user can retry
-// but we want to ensure they must hold continuously.
-holdStartTime = null;
-}
-}
+<script>
+let goal = 0, cumulative = 0, penalty = 0;
+let holding = false, holdTarget = 0, holdStartTime = 0;
+let hardModeActive = false, running = false;
+let imageData = null;
+let lastTouchTime = null, firstTouch = false;
+let hardModeInterval = null;
+let lastPenaltySecond = 0;
 
+const goalInput = document.getElementById("goalInput");
+const randomGoalCheckbox = document.getElementById("randomGoalCheckbox");
+const goalMin = document.getElementById("goalMin");
+const goalMax = document.getElementById("goalMax");
+const holdChanceEl = document.getElementById("holdChance");
+const promptEl = document.getElementById("prompt");
+const timerEl = document.getElementById("timer");
+const penaltyEl = document.getElementById("penaltyDisplay");
+const holdBar = document.getElementById("holdBar");
+const holdBarInner = document.getElementById("holdBarInner");
+const preview = document.getElementById("preview");
+const configPanel = document.getElementById("configPanel");
+const promptArea = document.getElementById("promptArea");
+const hideTimeCheckbox = document.getElementById("hideTime");
+const goalDisplay = document.getElementById("goalDisplay");
 
-// Add event listeners for both touch and mouse
-tapArea.addEventListener('touchstart', onPointerStart, {passive:false});
-tapArea.addEventListener('touchend', onPointerEnd, {passive:false});
-tapArea.addEventListener('touchcancel', onPointerCancel, {passive:false});
-tapArea.addEventListener('mousedown', (e)=>{onPointerStart(e)}, {passive:false});
-tapArea.addEventListener('mouseup', (e)=>{onPointerEnd(e)},{passive:false});
-tapArea.addEventListener('mouseleave', onPointerCancel,{passive:false});
-
-
-// Also support keyboard space for debugging on desktop
-window.addEventListener('keydown', (e)=>{
-if(e.code === 'Space'){
-// simulate pointerdown/up quickly for tap
-if(currentPrompt && currentPrompt.type === 'tap'){
-if(!waitingForTapCooldown) successAdd(0.5,'Tap (space)');
-}
-}
+document.getElementById("imageUpload").addEventListener("change", e=>{
+  const file = e.target.files[0];
+  if(file){
+    const reader = new FileReader();
+    reader.onload = ev => { imageData = ev.target.result; };
+    reader.readAsDataURL(file);
+  }
 });
 
+document.getElementById("startBtn").addEventListener("click", ()=>{
+  cumulative = 0; penalty = 0;
+  timerEl.textContent = "0";
+  penaltyEl.classList.add("hidden");
+  preview.classList.add("hidden");
+  configPanel.classList.remove("hidden");
+  running = true;
+  firstTouch = false;
+  lastPenaltySecond = 0;
 
-// Start/reset
-startBtn.addEventListener('click', ()=>{
-start();
+  if(randomGoalCheckbox.checked){
+    goal = Math.floor(Math.random()*(parseInt(goalMax.value)-parseInt(goalMin.value)+1))+parseInt(goalMin.value);
+    goalDisplay.classList.add("hidden");
+  } else {
+    goal = parseInt(goalInput.value);
+    goalDisplay.textContent = `Goal: ${goal}s`;
+    goalDisplay.classList.remove("hidden");
+  }
+
+  hardModeActive = document.getElementById("hardMode").checked;
+  if(hardModeActive) penaltyEl.classList.remove("hidden");
+
+  if(hideTimeCheckbox.checked){
+    timerEl.classList.add("hidden");
+  } else {
+    timerEl.classList.remove("hidden");
+  }
+
+  startHardModeTracking();
+  nextPrompt();
 });
-resetBtn.addEventListener('click', ()=>{
-reset();
-});
 
+function startHardModeTracking(){
+  if(hardModeInterval) clearInterval(hardModeInterval);
+  hardModeInterval = setInterval(()=>{
+    if(!running || !hardModeActive || !firstTouch || holding) return;
+    const now = Math.floor(performance.now() / 1000);
+    if(lastTouchTime){
+      const idleSeconds = Math.floor((performance.now() - lastTouchTime) / 1000);
+      if(idleSeconds > 2 && now > lastPenaltySecond){
+        goal += 1;
+        penalty += 1;
+        lastPenaltySecond = now;
+        penaltyEl.textContent = "Goal Penalty: "+penalty+"s";
+      }
+    }
+  },200);
+}
 
-// image upload
-imageUpload.addEventListener('change', (ev)=>{
-const f = ev.target.files && ev.target.files[0];
-if(!f) return;
-const reader = new FileReader();
-reader.onload = ()=>{
-uploadedDataUrl = reader.result;
-previewImg.src = uploadedDataUrl;
-logMsg('Image uploaded');
-};
-reader.readAsDataURL(f);
-});
+function nextPrompt(){
+  holdBar.classList.add("hidden");
+  if(Math.random()*100 < parseInt(holdChanceEl.value)){
+    holdTarget = Math.floor(Math.random()*(parseInt(document.getElementById("holdMax").value)-parseInt(document.getElementById("holdMin").value)+1))+parseInt(document.getElementById("holdMin").value);
+    promptEl.textContent = "Hold for "+holdTarget+"s";
+    holdBar.classList.remove("hidden");
+    holdBarInner.style.width = "0%";
+    promptArea.onclick = null;
+    promptArea.onpointerdown = ()=>{ registerTouch(); startHold(); };
+    promptArea.onpointerup = ()=>{ endHold(); };
+  } else {
+    promptEl.textContent = "Tap!";
+    promptArea.onclick = ()=>{ completeTap(); };
+    promptArea.onpointerdown = ()=>{ registerTouch(); };
+    promptArea.onpointerup = null;
+  }
+}
 
+function registerTouch(){
+  lastTouchTime = performance.now();
+  firstTouch = true;
+}
 
-// Keep UI in sync when settings change
-[holdChanceEl, maxHoldEl, goalEl].forEach(el=>el.addEventListener('input', updateUI));
+function completeTap(){
+  cumulative += 0.5;
+  updateTimer();
+  checkGoal();
+  promptArea.onclick = null;
+  setTimeout(nextPrompt, 500);
+}
 
+function startHold(){
+  holding = true;
+  holdStartTime = performance.now();
+  function updateHold(){
+    if(!holding) return;
+    const elapsed = (performance.now() - holdStartTime)/1000;
+    holdBarInner.style.width = Math.min((elapsed/holdTarget)*100,100)+"%";
+    if(elapsed >= holdTarget){
+      holding = false;
+      cumulative += holdTarget;
+      updateTimer();
+      registerTouch();
+      checkGoal();
+      nextPrompt();
+    } else {
+      requestAnimationFrame(updateHold);
+    }
+  }
+  requestAnimationFrame(updateHold);
+}
 
-// initialize
-updateUI();
-})();
+function endHold(){
+  holding = false;
+  holdBarInner.style.width="0%";
+  registerTouch();
+}
+
+function updateTimer(){
+  timerEl.textContent = cumulative.toFixed(0);
+  if(hardModeActive) penaltyEl.textContent = "Goal Penalty: "+penalty+"s";
+}
+
+function checkGoal(){
+  if(cumulative>=goal){
+    promptEl.textContent = "Goal reached!";
+    promptArea.onclick = null;
+    promptArea.onpointerdown = null;
+    promptArea.onpointerup = null;
+    running = false;
+    if(imageData){
+      preview.innerHTML = `<img src="${imageData}" />`;
+      preview.classList.remove("hidden");
+      configPanel.classList.add("hidden");
+    }
+  }
+}
+
+// Prevent double-tap zoom
+let lastTouchEnd = 0;
+document.addEventListener('touchend', function(event) {
+  const now = Date.now();
+  if (now - lastTouchEnd <= 300) event.preventDefault();
+  lastTouchEnd = now;
+}, false);
+
+// Prevent long-press context menu globally
+document.addEventListener('contextmenu', e => e.preventDefault());
 </script>
 </body>
 </html>
