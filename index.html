@@ -1,0 +1,79 @@
+<!doctype html>
+successAdd(req, 'Hold');
+} else {
+// failed — must retry same prompt
+logMsg(`Hold failed: held ${heldFor.toFixed(2)}s / required ${req.toFixed(2)}s — reset attempt`);
+// reset holdStartTime to null; the user must attempt again
+holdStartTime = null;
+promptSub.textContent = `Hold continuously for ${req.toFixed(2)}s — attempt reset.`;
+}
+}
+pointerDown = false;
+}
+
+
+// For safety, if pointer leaves area during hold, treat as release
+function onPointerCancel(e){
+if(!running) return;
+pointerDown = false;
+if(currentPrompt && currentPrompt.type === 'hold'){
+// no immediate message; user can retry
+// but we want to ensure they must hold continuously.
+holdStartTime = null;
+}
+}
+
+
+// Add event listeners for both touch and mouse
+tapArea.addEventListener('touchstart', onPointerStart, {passive:false});
+tapArea.addEventListener('touchend', onPointerEnd, {passive:false});
+tapArea.addEventListener('touchcancel', onPointerCancel, {passive:false});
+tapArea.addEventListener('mousedown', (e)=>{onPointerStart(e)}, {passive:false});
+tapArea.addEventListener('mouseup', (e)=>{onPointerEnd(e)},{passive:false});
+tapArea.addEventListener('mouseleave', onPointerCancel,{passive:false});
+
+
+// Also support keyboard space for debugging on desktop
+window.addEventListener('keydown', (e)=>{
+if(e.code === 'Space'){
+// simulate pointerdown/up quickly for tap
+if(currentPrompt && currentPrompt.type === 'tap'){
+if(!waitingForTapCooldown) successAdd(0.5,'Tap (space)');
+}
+}
+});
+
+
+// Start/reset
+startBtn.addEventListener('click', ()=>{
+start();
+});
+resetBtn.addEventListener('click', ()=>{
+reset();
+});
+
+
+// image upload
+imageUpload.addEventListener('change', (ev)=>{
+const f = ev.target.files && ev.target.files[0];
+if(!f) return;
+const reader = new FileReader();
+reader.onload = ()=>{
+uploadedDataUrl = reader.result;
+previewImg.src = uploadedDataUrl;
+logMsg('Image uploaded');
+};
+reader.readAsDataURL(f);
+});
+
+
+// Keep UI in sync when settings change
+[holdChanceEl, maxHoldEl, goalEl].forEach(el=>el.addEventListener('input', updateUI));
+
+
+// initialize
+updateUI();
+})();
+</script>
+</body>
+</html>
