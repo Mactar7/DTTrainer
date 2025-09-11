@@ -70,9 +70,9 @@ button {
   color: #333;
   z-index: 2;
 }
-.prompt { font-size: 60px; font-weight: bold; margin-bottom: 6px; z-index:1; } 
-.timer { font-size: 30px; font-weight: bold; margin-bottom: 6px; }
-.penalty { font-size: 16px; color: red; margin-bottom: 6px; }
+.prompt { font-size: 70px; font-weight: bold; margin-bottom: 6px; z-index:1; } 
+.timer { font-size: 34px; font-weight: bold; margin-bottom: 6px; }
+.penalty { font-size: 18px; color: red; margin-bottom: 6px; }
 .hidden { display: none; }
 .preview img {
   width: 100%;
@@ -80,17 +80,17 @@ button {
   object-fit: cover;
   display: block;
 }
-.hold-bar {
+.hold-bar, .ff-bar {
   position: absolute;
   top: 50px;
   left: 0;
-  height: 20px;
+  height: 30px;
   width: 100%;
   background: #ddd;
   border-radius: 10px 10px 0 0;
   z-index: 1;
 }
-.hold-bar-inner {
+.hold-bar-inner, .ff-bar-inner {
   height: 100%;
   background: #28a745;
   width: 0%;
@@ -144,6 +144,18 @@ button {
       <label>Hold Max (seconds)</label>
       <input type="number" id="holdMax" value="3" />
     </div>
+    <div class="form-group">
+      <label>FF Prompt % chance</label>
+      <input type="number" id="ffChance" value="20" min="0" max="100" />
+    </div>
+    <div class="form-group">
+      <label>FF Min (seconds)</label>
+      <input type="number" id="ffMin" value="3" />
+    </div>
+    <div class="form-group">
+      <label>FF Max (seconds)</label>
+      <input type="number" id="ffMax" value="6" />
+    </div>
     <div class="form-group toggles">
       <input type="checkbox" id="hideTime" />
       <label for="hideTime">Hide Time</label>
@@ -164,6 +176,9 @@ button {
     <div class="hold-bar hidden" id="holdBar">
       <div class="hold-bar-inner" id="holdBarInner"></div>
     </div>
+    <div class="ff-bar hidden" id="ffBar">
+      <div class="ff-bar-inner" id="ffBarInner"></div>
+    </div>
     <div class="prompt" id="prompt">Press Start</div>
     <div class="timer" id="timer">0</div>
     <div class="penalty hidden" id="penaltyDisplay">Goal Penalty: 0s</div>
@@ -174,22 +189,31 @@ button {
 <script>
 let goal = 0, cumulative = 0, penalty = 0;
 let holding = false, holdTarget = 0, holdStartTime = 0;
-let hardModeActive = false, running = false;
+let ffActive = false, ffTarget = 0, ffStartTime = 0, ffLastTapTime = null;
+let hardModeActive = false, running = false, pausedForFF = false;
 let imageData = null;
 let lastTouchTime = null, firstTouch = false;
 let hardModeInterval = null;
 let lastPenaltySecond = 0;
+let ffInitialTapWindow = 500; // 0.5 seconds
+let firstPromptDone = false;
+
 
 const goalInput = document.getElementById("goalInput");
 const randomGoalCheckbox = document.getElementById("randomGoalCheckbox");
 const goalMin = document.getElementById("goalMin");
 const goalMax = document.getElementById("goalMax");
 const holdChanceEl = document.getElementById("holdChance");
+const ffChanceEl = document.getElementById("ffChance");
+const ffMinEl = document.getElementById("ffMin");
+const ffMaxEl = document.getElementById("ffMax");
 const promptEl = document.getElementById("prompt");
 const timerEl = document.getElementById("timer");
 const penaltyEl = document.getElementById("penaltyDisplay");
 const holdBar = document.getElementById("holdBar");
 const holdBarInner = document.getElementById("holdBarInner");
+const ffBar = document.getElementById("ffBar");
+const ffBarInner = document.getElementById("ffBarInner");
 const preview = document.getElementById("preview");
 const configPanel = document.getElementById("configPanel");
 const promptArea = document.getElementById("promptArea");
@@ -214,6 +238,8 @@ document.getElementById("startBtn").addEventListener("click", ()=>{
   running = true;
   firstTouch = false;
   lastPenaltySecond = 0;
+  firstPromptDone = false;
+
 
   if(randomGoalCheckbox.checked){
     goal = Math.floor(Math.random()*(parseInt(goalMax.value)-parseInt(goalMin.value)+1))+parseInt(goalMin.value);
@@ -240,16 +266,16 @@ document.getElementById("startBtn").addEventListener("click", ()=>{
 function startHardModeTracking(){
   if(hardModeInterval) clearInterval(hardModeInterval);
   hardModeInterval = setInterval(()=>{
-    if(!running || !hardModeActive || !firstTouch || holding) return;
+    if(!running || !hardModeActive || !firstTouch || holding || pausedForFF) return;
     const now = Math.floor(performance.now() / 1000);
     if(lastTouchTime){
       const idleSeconds = Math.floor((performance.now() - lastTouchTime) / 1000);
       if(idleSeconds > 2 && now > lastPenaltySecond){
-        goal += 1;
-        penalty += 1;
-        lastPenaltySecond = now;
-        penaltyEl.textContent = "Goal Penalty: "+penalty+"s";
-      }
+      penalty += 1;
+      lastPenaltySecond = now;
+      penaltyEl.textContent = "Goal Penalty: " + penalty + "s";
+    }
+
     }
   },200);
 }
@@ -257,9 +283,25 @@ function startHardModeTracking(){
 function nextPrompt(){
   if(!running) return;
   holdBar.classList.add("hidden");
+  ffBar.classList.add("hidden");
   promptEl.style.color = "black";
 
-  if(Math.random()*100 < parseInt(holdChanceEl.value)){
+  let holdChance = parseInt(holdChanceEl.value);
+  let ffChance = parseInt(ffChanceEl.value);
+  let roll = Math.random()*100;
+
+   // Force first prompt to be Tap
+  if(!firstPromptDone){
+    firstPromptDone = true;
+    promptEl.textContent = "Tap!";
+    promptArea.onclick = ()=>{ completeTap(); };
+    promptArea.onpointerdown = ()=>{ registerTouch(); };
+    promptArea.onpointerup = null;
+    return; // Exit early so no random rolls yet
+  }
+
+  if(roll < holdChance){
+    // Hold
     holdTarget = Math.floor(Math.random()*(parseInt(document.getElementById("holdMax").value)-parseInt(document.getElementById("holdMin").value)+1))+parseInt(document.getElementById("holdMin").value);
     promptEl.textContent = "Hold for "+holdTarget+"s";
     promptEl.style.color = "blue";
@@ -268,28 +310,130 @@ function nextPrompt(){
     promptArea.onclick = null;
     promptArea.onpointerdown = ()=>{ registerTouch(); startHold(); };
     promptArea.onpointerup = ()=>{ endHold(); };
+  } else if(roll < holdChance + ffChance){
+    // FF Mode
+    startFFCountdown();
   } else {
+    // Tap
     promptEl.textContent = "Tap!";
-    promptEl.style.color = "black";
     promptArea.onclick = ()=>{ completeTap(); };
     promptArea.onpointerdown = ()=>{ registerTouch(); };
     promptArea.onpointerup = null;
   }
 }
 
+function startFFCountdown(){
+  let countdown = 3;
+  promptEl.textContent = `FF Mode in ${countdown}`;
+  pausedForFF = true;
+
+  const interval = setInterval(()=>{
+    countdown--;
+    if(countdown > 0){
+      promptEl.textContent = `FF Mode in ${countdown}`;
+    } else {
+      clearInterval(interval);
+      startFFMode();
+    }
+  },1000);
+}
+
+function startFFMode(){
+  ffActive = true;
+  ffTarget = Math.floor(Math.random()*(parseInt(ffMaxEl.value)-parseInt(ffMinEl.value)+1))+parseInt(ffMinEl.value);
+  ffStartTime = performance.now();
+  ffLastTapTime = null;
+  ffBar.classList.remove("hidden");
+  ffBarInner.style.width = "0%";
+  promptEl.textContent = "FF Mode! Tap Quickly!";
+  // pausedForFF stays true here, no penalty during FF
+
+  const ffInterval = setInterval(()=>{
+    if(!ffActive){ clearInterval(ffInterval); return; }
+    const now = performance.now();
+
+    // Fail if no initial tap within 0.5s
+    if(ffLastTapTime === null && now - ffStartTime > ffInitialTapWindow){
+      failFF(ffInterval);
+      return;
+    }
+
+    // Fail if too long since the last tap (>0.5s gap)
+    if(ffLastTapTime !== null && now - ffLastTapTime > ffInitialTapWindow){
+      failFF(ffInterval);
+      return;
+    }
+
+    // Update progress bar
+    const elapsed = (now - ffStartTime)/1000;
+    const progress = Math.min((elapsed / ffTarget) * 100, 100);
+    ffBarInner.style.width = progress + "%";
+
+    // Success when FF target time reached
+    if (elapsed >= ffTarget) {
+      ffActive = false;
+      pausedForFF = false; // resume hard mode after success
+      cumulative += (performance.now() - ffStartTime)/1000;
+
+      updateTimer();
+      checkGoal();
+      clearInterval(ffInterval);
+
+      promptEl.style.visibility = "hidden";
+      setTimeout(() => {
+        promptEl.style.visibility = "visible";
+        nextPrompt();
+      }, 500);
+    }
+  },16);
+
+  function handleFFTap(e){
+    e.preventDefault();
+    if(ffActive){
+      const now = performance.now();
+      // If tapped too late (>0.5s gap), reset immediately
+      if(ffLastTapTime !== null && now - ffLastTapTime > ffInitialTapWindow){
+        failFF(ffInterval);
+        return;
+      }
+      ffLastTapTime = now;
+    }
+  }
+  promptArea.addEventListener("pointerdown", handleFFTap);
+
+  const removeListener = setInterval(()=>{
+    if(!ffActive){
+      promptArea.removeEventListener("pointerdown", handleFFTap);
+      clearInterval(removeListener);
+    }
+  },50);
+}
+
+function failFF(ffInterval){
+  ffActive = false;
+  ffBarInner.style.width = "0%";
+  if(hardModeActive) { penalty += 1; penaltyEl.textContent = "Goal Penalty: "+penalty+"s"; }
+  clearInterval(ffInterval);
+  pausedForFF = false; // resume hard mode after failure
+  startFFCountdown(); // restart countdown
+}
+
+
 function registerTouch(){
   lastTouchTime = performance.now();
   firstTouch = true;
 }
-
 function completeTap(){
   cumulative += 0.5;
   updateTimer();
   checkGoal();
+  promptEl.style.visibility = "hidden";
   promptArea.onclick = null;
-  setTimeout(nextPrompt, 500);
+  setTimeout(() => {
+    promptEl.style.visibility = "visible";
+    nextPrompt();
+  }, 500);
 }
-
 function startHold(){
   holding = true;
   holdStartTime = performance.now();
@@ -303,35 +447,37 @@ function startHold(){
       updateTimer();
       registerTouch();
       checkGoal();
-      nextPrompt();
+      promptEl.style.visibility = "hidden";
+      setTimeout(() => {
+        promptEl.style.visibility = "visible";
+        nextPrompt();
+      }, 500);
     } else {
       requestAnimationFrame(updateHold);
     }
   }
   requestAnimationFrame(updateHold);
 }
-
 function endHold(){
   holding = false;
   holdBarInner.style.width="0%";
   registerTouch();
 }
-
 function updateTimer(){
   timerEl.textContent = cumulative.toFixed(0);
   if(hardModeActive) penaltyEl.textContent = "Goal Penalty: "+penalty+"s";
 }
-
-function checkGoal(){
-  if(cumulative>=goal){
+function checkGoal() {
+  const effectiveGoal = hardModeActive ? goal + penalty : goal;
+  if (cumulative >= effectiveGoal) {
     running = false;
     promptEl.classList.add("hidden");
     timerEl.classList.add("hidden");
     penaltyEl.classList.add("hidden");
     holdBar.classList.add("hidden");
+    ffBar.classList.add("hidden");
     configPanel.classList.add("hidden");
 
-    // Show full-screen image with "Goal Reached"
     const fsDiv = document.createElement("div");
     fsDiv.className = "fullscreen-image";
     fsDiv.innerHTML = `<div class="goal-display">Goal Reached!</div>
@@ -347,10 +493,7 @@ document.addEventListener('touchend', function(event) {
   if (now - lastTouchEnd <= 300) event.preventDefault();
   lastTouchEnd = now;
 }, false);
-
-// Prevent long-press context menu globally
 document.addEventListener('contextmenu', e => e.preventDefault());
 </script>
 </body>
 </html>
-
